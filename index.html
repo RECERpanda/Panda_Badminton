@@ -110,6 +110,7 @@
 <div id="gameContainer">
     <img id="p1Gif" style="position: absolute; display: none; z-index: 10; transform-origin: center center; pointer-events: none;">
     <img id="p2Gif" style="position: absolute; display: none; z-index: 10; transform-origin: center center; pointer-events: none;">
+    <img id="shuttleDom" style="position: absolute; display: none; z-index: 20; pointer-events: none;">
     <div id="ui">
         <div id="score1">0</div>
         <div id="score2">0</div>
@@ -262,7 +263,6 @@ class Player {
                 // 0.6초(36프레임) 이동 + 0.6초(36프레임) 딜레이 = 총 72프레임
                 this.slideTimer = 72; 
                 this.slideDir = keys[this.controls.left] ? -1 : 1; 
-                this.slideImg.src = '슬라이딩.gif?t=' + Date.now();
             } 
             else if (this.bufferTimer === 0 && !isFadeInReady) {
                 let canSwing = !this.isGrounded || this.isSliding || isServing;
@@ -396,6 +396,7 @@ class Shuttlecock {
         this.vy = 0;
         this.isDead = false;
         this.img = shuttleImg;
+        this.domElement = document.getElementById('shuttleDom');
     }
 
     update() {
@@ -417,8 +418,8 @@ class Shuttlecock {
                 this.vx *= 0.5;
                 this.y = netTop - this.radius;
             } else {
-                this.vx *= -0.3;
-                this.vy = 3; 
+                // 옆면 충돌 시 좌우 방향만 반전 및 약간 감속 (아래로 꽂히지 않고 튕겨 나옴)
+                this.vx *= -0.5;
                 if (this.x < NET_X) this.x = netLeft - this.radius;
                 else this.x = netRight + this.radius;
             }
@@ -454,7 +455,7 @@ class Shuttlecock {
     }
 
     draw(ctx) {
-        // 1. 그림자 그리기
+        // 1. 그림자 그리기 (캔버스에 유지)
         ctx.save();
         ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
         ctx.beginPath();
@@ -463,33 +464,44 @@ class Shuttlecock {
         ctx.fill();
         ctx.restore();
 
-        // 2. 셔틀콕 본체 그리기 (코르크 머리를 회전축으로 설정)
-        ctx.save();
-        ctx.translate(this.x, this.y);
-
+        // 방향 각도 계산
         let angle = 0;
-        if (!this.isDead && (this.vx !== 0 || this.vy !== 0)) {
+        if (game.state === 'FADEIN_READY' || game.state === 'SERVING') {
+            // 서브 대기 중일 때는 코르크 머리가 아래를 향하도록 설정 (90도)
+            angle = Math.PI / 2;
+        } else if (!this.isDead && (this.vx !== 0 || this.vy !== 0)) {
             // 날아가는 방향을 향하도록 각도 계산
             angle = Math.atan2(this.vy, this.vx);
         } else if (this.isDead) {
             // 바닥에 떨어졌을 때는 코르크 머리가 바닥을 향하도록 설정
             angle = Math.PI / 2; 
         }
-        ctx.rotate(angle);
 
+        // 2. 셔틀콕 본체 그리기 (DOM 요소로 z-index 최상위 적용)
         if (this.img.complete && this.img.naturalWidth !== 0) {
             let imgRatio = this.img.naturalHeight / this.img.naturalWidth;
             let drawWidth = 25; // 물리엔진 기준 반경 11.2에 맞는 적절한 시각적 너비 설정
             let drawHeight = drawWidth * imgRatio;
 
             // 이미지가 오른쪽을 바라보는 셔틀콕이라고 가정.
-            // 코르크 머리(빨간 점)가 가로의 약 85%, 세로의 50% 지점에 위치하도록 오프셋 이동
-            let offsetX = -drawWidth * 0.85; 
-            let offsetY = -drawHeight * 0.5;
+            // 코르크 머리(빨간 점)가 가로의 약 85%, 세로의 50% 지점에 위치하도록 오프셋 퍼센트 위치 계산
+            let leftPx = this.x - drawWidth * 0.85; 
+            let topPx = this.y - drawHeight * 0.5;
 
-            ctx.drawImage(this.img, offsetX, offsetY, drawWidth, drawHeight);
+            this.domElement.src = this.img.src;
+            this.domElement.style.width = (drawWidth / canvas.width) * 100 + '%';
+            this.domElement.style.height = (drawHeight / canvas.height) * 100 + '%';
+            this.domElement.style.left = (leftPx / canvas.width) * 100 + '%';
+            this.domElement.style.top = (topPx / canvas.height) * 100 + '%';
+            this.domElement.style.transformOrigin = '85% 50%';
+            this.domElement.style.transform = `rotate(${angle}rad)`;
+            this.domElement.style.display = 'block';
+            this.domElement.style.opacity = 1 - game.fadeAlpha;
         } else {
-            // 이미지 로딩 전/실패 시 기존 공 모양으로 대체
+            // 이미지 로딩 전/실패 시 기존 공 모양으로 대체 (캔버스에)
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(angle);
             ctx.fillStyle = 'white';
             ctx.beginPath();
             ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
@@ -497,8 +509,9 @@ class Shuttlecock {
             ctx.strokeStyle = 'black';
             ctx.lineWidth = 2;
             ctx.stroke();
+            ctx.restore();
+            this.domElement.style.display = 'none';
         }
-        ctx.restore();
     }
 }
 
