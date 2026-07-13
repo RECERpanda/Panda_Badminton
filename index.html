@@ -401,86 +401,157 @@ class Player {
         }
 
         let myCenter = this.x + this.width / 2;
-        let targetX = myCenter;
-
-        if (this.aiDifficulty === 'easy') {
-            targetX = shuttle.x;
-        } else if (this.aiDifficulty === 'normal') {
-            targetX = shuttle.x + shuttle.vx * 15; 
-        } else if (this.aiDifficulty === 'hard') {
-            // 최고 난이도 전용: 공기 저항과 중력을 사전 연산하여 네트 반사까지 고려한 정확한 낙하 위치 계산
+        let isShuttleOnMySide = this.isPlayer1 ? shuttle.x < NET_X : shuttle.x > NET_X;
+        
+        let framesToIntercept = -1;
+        let predictedX = shuttle.x;
+        
+        // 1. 완벽한 셔틀콕 궤적 예측 시뮬레이션 (네트 및 벽 충돌까지 계산)
+        if (isShuttleOnMySide) {
             let simX = shuttle.x, simY = shuttle.y, simVx = shuttle.vx, simVy = shuttle.vy;
-            let loopCount = 0;
-            while(simY < GROUND_Y - 40 && loopCount < 150) {
+            for (let i = 0; i < 150; i++) {
                 simVx *= SHUTTLECOCK_DRAG;
                 simVy *= SHUTTLECOCK_DRAG;
                 simVy += GRAVITY * 0.85;
                 simX += simVx;
                 simY += simVy;
-                loopCount++;
+                
+                // 네트 충돌 시뮬레이션
                 let netLeft = NET_X - NET_WIDTH/2;
                 let netRight = NET_X + NET_WIDTH/2;
                 let netTop = GROUND_Y - NET_HEIGHT;
                 if (simX + shuttle.radius > netLeft && simX - shuttle.radius < netRight && simY + shuttle.radius > netTop && simY < GROUND_Y) {
+                    if (simY < netTop + 8 && simVy > 0) {
+                        simVy *= -0.6;
+                        simVx *= 0.5;
+                    } else {
+                        simVx *= -0.5;
+                    }
+                }
+                
+                // 벽 반사 시뮬레이션
+                if (simX - shuttle.radius < 0 || simX + shuttle.radius > canvas.width) {
                     simVx *= -0.5;
                 }
+                
+                // 점프 후 타격하기 딱 좋은 높이 도달 시점(타이밍) 계산
+                if (simY >= GROUND_Y - this.height - 80) {
+                    framesToIntercept = i;
+                    predictedX = simX;
+                    break;
+                }
             }
-            targetX = simX;
         }
 
-        let netLeft = NET_X - NET_WIDTH/2;
-        let netRight = NET_X + NET_WIDTH/2;
-        let myMinX = this.isPlayer1 ? 0 : netRight + this.width/2;
-        let myMaxX = this.isPlayer1 ? netLeft - this.width/2 : canvas.width;
+        let targetX = myCenter;
+
+        // 2. 난이도별 목표 위치(targetX) 설정
+        if (!isShuttleOnMySide) {
+            // 공이 넘어갔으면 코트 중앙으로 복귀
+            let netLeft = NET_X - NET_WIDTH/2;
+            let netRight = NET_X + NET_WIDTH/2;
+            let myMinX = this.isPlayer1 ? 0 : netRight + this.width/2;
+            let myMaxX = this.isPlayer1 ? netLeft - this.width/2 : canvas.width;
+            targetX = (myMinX + myMaxX) / 2;
+        } else {
+            if (this.aiDifficulty === 'hard') {
+                targetX = (framesToIntercept !== -1) ? predictedX : shuttle.x;
+            } else if (this.aiDifficulty === 'normal') {
+                // 약간의 예측 오차 부여
+                targetX = (framesToIntercept !== -1) ? predictedX + (Math.random() * 40 - 20) : shuttle.x;
+            } else {
+                // 초보자는 현재 셔틀콕 위치만 쫓아가며 심한 오차 발생
+                targetX = shuttle.x + (Math.random() * 100 - 50);
+            }
+        }
         
-        let isShuttleOnMySide = this.isPlayer1 ? shuttle.x < NET_X : shuttle.x > NET_X;
-        let isShuttleMovingTowardsMe = this.isPlayer1 ? shuttle.vx < 0 : shuttle.vx > 0;
+        // 이동 범위 제한 
+        if (this.isPlayer1) targetX = Math.max(this.width/2, Math.min(NET_X - NET_WIDTH/2 - this.width/2, targetX));
+        else targetX = Math.max(NET_X + NET_WIDTH/2 + this.width/2, Math.min(canvas.width - this.width/2, targetX));
 
-        if (!isShuttleOnMySide && !isShuttleMovingTowardsMe) {
-            targetX = (myMinX + myMaxX) / 2; // 공이 넘어가면 중앙 복귀
-        }
-
+        // 3. 목표 위치로 이동 처리
         let diffX = targetX - myCenter;
-        if (Math.abs(diffX) > 10) {
+        let moveThreshold = this.aiDifficulty === 'hard' ? 5 : (this.aiDifficulty === 'normal' ? 10 : 25);
+        
+        if (Math.abs(diffX) > moveThreshold) {
             if (diffX > 0) this.aiKeys.right = true;
             else this.aiKeys.left = true;
         }
-
-        if (this.aiDifficulty === 'easy' && Math.random() < 0.2) {
+        
+        if (this.aiDifficulty === 'easy' && Math.random() < 0.05) {
             this.aiKeys.left = false;
-            this.aiKeys.right = false; // 쉬움 난이도 멈칫거리는 허점
+            this.aiKeys.right = false; // 초보자의 멈칫거림
         }
 
-        let distToShuttle = Math.sqrt((shuttle.x - myCenter) ** 2 + (shuttle.y - (this.y + this.height/2)) ** 2);
-        let canReach = distToShuttle <= shuttle.radius + 40; 
-        
-        if (canReach && isShuttleOnMySide) {
-            this.aiKeys.action = true;
+        // 4. "점프 - 체공 - 스윙" 연계 판단 및 실행
+        if (isShuttleOnMySide) {
+            let xDist = Math.abs(shuttle.x - myCenter);
+            let distToShuttle = Math.sqrt((shuttle.x - myCenter) ** 2 + (shuttle.y - (this.y + this.height/2)) ** 2);
+            
+            let shouldJump = false;
+            let shouldSwing = false;
+            let shouldSlide = false;
             
             if (this.aiDifficulty === 'hard') {
-                if (shuttle.y < this.y - 15) {
-                    this.aiKeys.down = true; // 완벽한 스매시
-                    this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
-                } else {
-                    this.aiKeys.jump = true; // 클리어
-                    this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
+                // 점프: 셔틀콕이 타격 고도에 도달하기 약 28프레임 전(도약 시간)에 정확히 점프
+                if ((framesToIntercept > 0 && framesToIntercept <= 28) || (framesToIntercept === -1 && shuttle.y > GROUND_Y - 300 && shuttle.y < GROUND_Y - 100)) {
+                    if (xDist < 80) shouldJump = true;
+                }
+                // 스윙: 공중에 있고 셔틀콕이 사정거리에 들어오면 바로 스윙
+                if (!this.isGrounded && distToShuttle < 110) {
+                    shouldSwing = true;
+                }
+                // 슬라이딩: 공이 멀리 떨어지는데 지상에 있을 때 다이빙 캐치
+                if (this.isGrounded && framesToIntercept > 0 && framesToIntercept <= 25 && xDist > 100 && xDist < 250) {
+                    shouldSlide = true;
                 }
             } else if (this.aiDifficulty === 'normal') {
-                if (shuttle.y < this.y - 10 && Math.random() < 0.5) {
-                    this.aiKeys.down = true;
-                    this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
-                } else {
-                    this.aiKeys.jump = true;
+                if ((framesToIntercept > 0 && framesToIntercept <= 25) || (framesToIntercept === -1 && shuttle.y > GROUND_Y - 300 && shuttle.y < GROUND_Y - 100)) {
+                    if (xDist < 90) shouldJump = true;
                 }
-            } else {
-                this.aiKeys.jump = true; // 초보자용: 항상 대각선 위로 스윙
+                if (!this.isGrounded && distToShuttle < 100) {
+                    shouldSwing = true;
+                }
+            } else { 
+                if ((framesToIntercept > 0 && framesToIntercept <= 20) || (framesToIntercept === -1 && shuttle.y > GROUND_Y - 300 && shuttle.y < GROUND_Y - 100)) {
+                    if (xDist < 100 && Math.random() < 0.8) shouldJump = true; 
+                }
+                if (!this.isGrounded && distToShuttle < 100) {
+                    if (Math.random() < 0.7) shouldSwing = true; // 가끔 헛스윙
+                }
             }
-        }
-
-        // 어려움 난이도 다이빙 슬라이딩 
-        if (this.aiDifficulty === 'hard' && isShuttleOnMySide && isShuttleMovingTowardsMe && shuttle.y > GROUND_Y - 150) {
-            if (Math.abs(diffX) > 120 && this.isGrounded) {
-                this.aiKeys.action = true; 
+            
+            // 액션 키 바인딩 실행
+            if (shouldSlide) {
+                this.aiKeys.action = true; // 이동 키와 결합되어 다이빙 슬라이딩 발동
+            }
+            
+            if (shouldJump && this.isGrounded) {
+                this.aiKeys.jump = true;
+            }
+            
+            if (shouldSwing && !this.isGrounded) {
+                this.aiKeys.action = true;
+                
+                // 타격 방향 결정
+                if (this.aiDifficulty === 'hard') {
+                    if (shuttle.y < this.y - 10) {
+                        this.aiKeys.down = true; // 강스매시
+                        this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
+                    } else {
+                        this.aiKeys.jump = true; // 클리어
+                        this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
+                    }
+                } else if (this.aiDifficulty === 'normal') {
+                    if (shuttle.y < this.y && Math.random() < 0.5) {
+                        this.aiKeys.down = true;
+                        this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
+                    } else {
+                        this.aiKeys.jump = true;
+                    }
+                } else {
+                    this.aiKeys.jump = true; // 쉬움은 무조건 위로 띄워주기
+                }
             }
         }
     }
