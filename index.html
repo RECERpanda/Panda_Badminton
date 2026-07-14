@@ -140,6 +140,102 @@
             opacity: 0.3;
             cursor: not-allowed;
         }
+        
+        .menu-btn-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+        .setting-icon-btn {
+            font-size: 30px;
+            padding: 10px 15px;
+            margin: 15px 0 15px 15px;
+            background-color: #333;
+            color: #fff;
+            border: 5px solid #000;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .setting-icon-btn:hover {
+            background-color: #555;
+            transform: scale(1.05);
+        }
+        #settingsOverlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 25;
+            display: none;
+        }
+        #settingsUi {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: #222;
+            border: 5px solid #ffcc00;
+            border-radius: 20px;
+            padding: 40px;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            z-index: 30;
+            color: white;
+            box-shadow: 0 0 30px rgba(0,0,0,1);
+        }
+        .settings-title {
+            font-size: 40px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            color: #ffcc00;
+        }
+        .settings-label {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: #aaa;
+        }
+        .settings-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .set-btn {
+            font-size: 20px;
+            font-weight: bold;
+            font-family: inherit;
+            padding: 10px 20px;
+            background-color: #444;
+            color: #fff;
+            border: 3px solid #666;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .set-btn.selected {
+            background-color: #ffcc00;
+            color: #000;
+            border-color: #fff;
+        }
+        .set-btn:hover:not(.selected) {
+            background-color: #666;
+        }
+        .confirm-btn {
+            align-self: flex-end;
+            font-size: 24px;
+            font-weight: bold;
+            padding: 10px 30px;
+            background-color: #ffaa00;
+            color: #000;
+            border: 3px solid #fff;
+            border-radius: 10px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .confirm-btn:hover {
+            background-color: #ffcc00;
+        }
     </style>
 </head>
 <body>
@@ -165,9 +261,33 @@
     
     <div id="menuUi">
         <div class="menu-title">판다 배드민턴</div>
-        <button class="menu-btn" onclick="showSingleSetup()">혼자서 재미있게~</button>
-        <button class="menu-btn" onclick="startMultiGame()">둘이서 함께~</button>
+        <div class="menu-btn-wrapper">
+            <button class="menu-btn" onclick="showSingleSetup()">혼자서 재미있게~</button>
+            <button class="setting-icon-btn" onclick="openSettings()">🔧</button>
+        </div>
+        <div class="menu-btn-wrapper">
+            <button class="menu-btn" onclick="startMultiGame()">둘이서 함께~</button>
+            <button class="setting-icon-btn" onclick="openSettings()">🔧</button>
+        </div>
         <button class="menu-btn" onclick="showConstructionPopup()">온라인 플레이</button>
+    </div>
+
+    <div id="settingsOverlay"></div>
+    <div id="settingsUi">
+        <div class="settings-title">게임 설정</div>
+        <div class="settings-label">목표 점수</div>
+        <div class="settings-row" id="scoreSettings">
+            <button class="set-btn" onclick="tempSettings.targetScore = 5; updateSettingsUI();">5점</button>
+            <button class="set-btn" onclick="tempSettings.targetScore = 10; updateSettingsUI();">10점</button>
+            <button class="set-btn" onclick="tempSettings.targetScore = 15; updateSettingsUI();">15점</button>
+        </div>
+        <div class="settings-label">게임 속도</div>
+        <div class="settings-row" id="speedSettings">
+            <button class="set-btn" onclick="tempSettings.speed = 0.8; updateSettingsUI();">느리게</button>
+            <button class="set-btn" onclick="tempSettings.speed = 1.0; updateSettingsUI();">보통</button>
+            <button class="set-btn" onclick="tempSettings.speed = 1.2; updateSettingsUI();">빠르게</button>
+        </div>
+        <button class="confirm-btn" onclick="applySettings()">확인</button>
     </div>
 
     <div id="singleSetupUi">
@@ -188,6 +308,61 @@
     
     <canvas id="gameCanvas" width="1280" height="720"></canvas>
 </div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    window.appSettings = { targetScore: 15, speed: 1.2 };
+    let db, auth, userId;
+
+    try {
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'panda-badminton-v1';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        
+        if (firebaseConfig) {
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            
+            const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+            
+            (async () => {
+                try {
+                    if (token) {
+                        await signInWithCustomToken(auth, token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    userId = auth.currentUser.uid;
+                    loadSettings();
+                } catch (e) { console.error("Auth error:", e); }
+            })();
+        }
+    } catch(e) { console.error("Firebase init failed:", e); }
+
+    async function loadSettings() {
+        if (!db || !userId) return;
+        try {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'panda-badminton-v1';
+            const docRef = doc(db, 'artifacts', appId, 'users', userId, 'settings');
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                window.appSettings = { ...window.appSettings, ...docSnap.data() };
+            }
+        } catch(e) { console.error(e); }
+    }
+
+    window.saveSettingsToDb = async function() {
+        if (!db || !userId) return;
+        try {
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'panda-badminton-v1';
+            const docRef = doc(db, 'artifacts', appId, 'users', userId, 'settings');
+            await setDoc(docRef, window.appSettings);
+        } catch(e) { console.error(e); }
+    }
+</script>
 
 <script>
 const canvas = document.getElementById('gameCanvas');
@@ -220,6 +395,8 @@ const game = {
     playerSide: null
 };
 
+let tempSettings = { targetScore: 15, speed: 1.2 };
+
 const keys = {};
 window.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
@@ -247,6 +424,13 @@ window.addEventListener('keydown', (e) => {
             showMenuDOM();
         }
     }
+
+    if (game.state === 'GAME_SET_WAIT_KEY') {
+        if (key === 'z' || e.key === 'Enter') {
+            game.state = 'GAME_SET_TRANSITION_IN';
+            game.timer = 60;
+        }
+    }
 });
 window.addEventListener('keyup', (e) => {
     const key = e.key.toLowerCase();
@@ -257,6 +441,40 @@ window.addEventListener('keyup', (e) => {
 function showMenuDOM() {
     document.getElementById('menuUi').style.display = 'flex';
     document.getElementById('menuUi').style.opacity = 1;
+}
+
+function openSettings() {
+    if (!window.appSettings) window.appSettings = { targetScore: 15, speed: 1.2 };
+    tempSettings = { ...window.appSettings };
+    document.getElementById('settingsOverlay').style.display = 'block';
+    document.getElementById('settingsUi').style.display = 'flex';
+    updateSettingsUI();
+}
+
+function updateSettingsUI() {
+    const scoreBtns = document.getElementById('scoreSettings').querySelectorAll('.set-btn');
+    scoreBtns.forEach(btn => {
+        btn.classList.remove('selected');
+        if (parseInt(btn.innerText) === tempSettings.targetScore) btn.classList.add('selected');
+    });
+
+    const speedBtns = document.getElementById('speedSettings').querySelectorAll('.set-btn');
+    speedBtns.forEach(btn => {
+        btn.classList.remove('selected');
+        let txt = btn.innerText;
+        if (txt === '느리게' && tempSettings.speed === 0.8) btn.classList.add('selected');
+        if (txt === '보통' && tempSettings.speed === 1.0) btn.classList.add('selected');
+        if (txt === '빠르게' && tempSettings.speed === 1.2) btn.classList.add('selected');
+    });
+}
+
+function applySettings() {
+    window.appSettings = { ...tempSettings };
+    if (window.saveSettingsToDb) {
+        window.saveSettingsToDb();
+    }
+    document.getElementById('settingsOverlay').style.display = 'none';
+    document.getElementById('settingsUi').style.display = 'none';
 }
 
 function showConstructionPopup() {
@@ -330,7 +548,7 @@ function startGame() {
     game.state = 'FADEIN_READY';
     game.timer = 120;
     game.fadeAlpha = 1;
-    game.timeScale = 1; 
+    game.timeScale = window.appSettings ? window.appSettings.speed : 1.2; 
 }
 
 class Player {
@@ -533,17 +751,20 @@ class Player {
             if (shouldSwing && !this.isGrounded) {
                 this.aiKeys.action = true;
                 
+                let distToNet = Math.abs(this.x + this.width/2 - NET_X);
+                
                 // 타격 방향 결정
                 if (this.aiDifficulty === 'hard') {
-                    if (shuttle.y < this.y - 10) {
-                        this.aiKeys.down = true; // 강스매시
+                    // 네트와 가깝고 셔틀콕이 타점보다 높을 때만 스매시
+                    if (shuttle.y < this.y - 10 && distToNet < 250) {
+                        this.aiKeys.down = true; 
                         this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
                     } else {
-                        this.aiKeys.jump = true; // 클리어
+                        this.aiKeys.jump = true; 
                         this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
                     }
                 } else if (this.aiDifficulty === 'normal') {
-                    if (shuttle.y < this.y && Math.random() < 0.5) {
+                    if (shuttle.y < this.y && distToNet < 250 && Math.random() < 0.4) {
                         this.aiKeys.down = true;
                         this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
                     } else {
@@ -747,9 +968,16 @@ class Shuttlecock {
                 document.getElementById('score1').innerText = game.score[0];
                 document.getElementById('score2').innerText = game.score[1];
                 
-                game.state = 'POINT_SCORED';
-                game.timer = 60; 
-                game.timeScale = 0.2; 
+                let targetScr = window.appSettings ? window.appSettings.targetScore : 15;
+                if (game.score[0] >= targetScr || game.score[1] >= targetScr) {
+                    game.state = 'GAME_SET_DELAY';
+                    game.timer = 180; // 3초 대기
+                    game.timeScale = 0;
+                } else {
+                    game.state = 'POINT_SCORED';
+                    game.timer = 60; 
+                    game.timeScale = 0.2; 
+                }
             }
         }
         
@@ -879,7 +1107,7 @@ function resetPositions() {
     p1.x = 200; p1.y = GROUND_Y - p1.height; p1.vx = 0; p1.vy = 0; p1.isGrounded = true; p1.isSliding = false; p1.slideDir = 1; p1.currentAnim = null; p1.bufferTimer = 0;
     p2.x = 1020; p2.y = GROUND_Y - p2.height; p2.vx = 0; p2.vy = 0; p2.isGrounded = true; p2.isSliding = false; p2.slideDir = -1; p2.currentAnim = null; p2.bufferTimer = 0;
     shuttle.isDead = false;
-    game.timeScale = 1; // 득점 등으로 걸렸던 렉/슬로우 복원 보장
+    game.timeScale = window.appSettings ? window.appSettings.speed : 1.2; // 득점 등으로 걸렸던 렉/슬로우 복원 보장
 }
 
 function gameLoop() {
@@ -957,6 +1185,41 @@ function gameLoop() {
             game.timeScale = 0; 
         }
     } 
+    else if (game.state === 'GAME_SET_DELAY') {
+        game.timer--;
+        if (game.timer <= 0) {
+            game.state = 'GAME_SET_WAIT_KEY';
+        }
+    }
+    else if (game.state === 'GAME_SET_WAIT_KEY') {
+        // 대기
+    }
+    else if (game.state === 'GAME_SET_TRANSITION_IN') {
+        game.timer--;
+        if (game.timer <= 0) {
+            game.state = 'GAME_SET_TRANSITION_MID';
+            game.timer = 60; 
+            resetPositions();
+            document.getElementById('ui').style.display = 'none';
+            p1.domElement.style.display = 'none';
+            p2.domElement.style.display = 'none';
+            shuttle.domElement.style.display = 'none';
+        }
+    }
+    else if (game.state === 'GAME_SET_TRANSITION_MID') {
+        game.timer--;
+        if (game.timer <= 0) {
+            game.state = 'GAME_SET_TRANSITION_OUT';
+            game.timer = 60;
+            showMenuDOM();
+        }
+    }
+    else if (game.state === 'GAME_SET_TRANSITION_OUT') {
+        game.timer--;
+        if (game.timer <= 0) {
+            game.state = 'MENU_IDLE';
+        }
+    }
     else if (game.state === 'FADEOUT') {
         game.timer--;
         game.fadeAlpha = 1 - (game.timer / 60); 
@@ -964,7 +1227,7 @@ function gameLoop() {
             resetPositions();
             game.state = 'FADEIN_READY';
             game.timer = 120; 
-            game.timeScale = 1;
+            game.timeScale = window.appSettings ? window.appSettings.speed : 1.2;
         }
     } 
     else if (game.state === 'FADEIN_READY') {
@@ -1030,11 +1293,43 @@ function gameLoop() {
             ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
             ctx.fillRect(srvPlayer.x, srvPlayer.y, srvPlayer.width, srvPlayer.height);
         }
+    } else if (game.state === 'SERVING') {
+        let timeLeft = Math.ceil(game.timer / 60);
+        ctx.fillStyle = 'red';
+        ctx.font = 'bold 80px "Malgun Gothic", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(timeLeft, canvas.width / 2, 100);
     } else if (game.state === 'TIMEOUT') {
         ctx.fillStyle = 'red';
         ctx.font = 'bold 80px "Malgun Gothic", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('Time out', canvas.width / 2, 250);
+    } else if (game.state === 'GAME_SET_DELAY' || game.state === 'GAME_SET_WAIT_KEY') {
+        ctx.fillStyle = 'red';
+        ctx.font = 'bold 120px "Malgun Gothic", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Game set!', canvas.width / 2, 250);
+        
+        if (game.state === 'GAME_SET_WAIT_KEY') {
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 40px "Malgun Gothic", sans-serif';
+            ctx.fillText('Z 키 혹은 Enter 키를 누르시면 경기가 종료됩니다.', canvas.width / 2, 400);
+        }
+    }
+
+    if (game.state.startsWith('GAME_SET_TRANSITION_')) {
+        ctx.fillStyle = 'black';
+        if (game.state === 'GAME_SET_TRANSITION_IN') {
+            let progress = 1 - (game.timer / 60); 
+            let xOffset = canvas.width - (progress * canvas.width);
+            ctx.fillRect(xOffset, 0, canvas.width, canvas.height);
+        } else if (game.state === 'GAME_SET_TRANSITION_MID') {
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        } else if (game.state === 'GAME_SET_TRANSITION_OUT') {
+            let progress = 1 - (game.timer / 60); 
+            let xOffset = -(progress * canvas.width);
+            ctx.fillRect(xOffset, 0, canvas.width, canvas.height);
+        }
     }
 
     if (game.fadeAlpha > 0) {
