@@ -379,10 +379,59 @@ const SHUTTLECOCK_DRAG = 0.96;
 const GROUND_Y = 620;
 const NET_X = 640;
 const PLAYER_SIZE = 60; 
-const NET_HEIGHT = PLAYER_SIZE * 2; 
-const NET_WIDTH = 6; 
+const NET_HEIGHT = PLAYER_SIZE * 2;
+const NET_WIDTH = 6;
+const NET_CAP_RADIUS = 10;
 const HITBOX_RADIUS = 55; 
-const JUMP_POWER = -Math.sqrt(2 * GRAVITY * (PLAYER_SIZE * 3.5)); 
+const JUMP_POWER = -Math.sqrt(2 * GRAVITY * (PLAYER_SIZE * 3.5));
+
+// 얇은 기둥과 상단 원을 하나의 연속된 단단한 네트로 처리한다.
+// 실제 셔틀콕과 AI 예측이 같은 함수를 사용하므로 보이는 네트와 물리가 어긋나지 않는다.
+function resolveNetCollision(body) {
+    const netTop = GROUND_Y - NET_HEIGHT;
+    const halfWidth = NET_WIDTH / 2;
+    const capX = NET_X;
+    const capY = netTop;
+
+    // 상단 원 충돌: 어느 방향에서 닿아도 법선 방향으로 튕긴다.
+    const dx = body.x - capX;
+    const dy = body.y - capY;
+    const minDistance = body.radius + NET_CAP_RADIUS;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq < minDistance * minDistance) {
+        const distance = Math.sqrt(distanceSq) || 0.001;
+        const nx = dx / distance;
+        const ny = dy / distance;
+        body.x = capX + nx * minDistance;
+        body.y = capY + ny * minDistance;
+        const velocityAlongNormal = body.vx * nx + body.vy * ny;
+        if (velocityAlongNormal < 0) {
+            body.vx -= 1.5 * velocityAlongNormal * nx;
+            body.vy -= 1.5 * velocityAlongNormal * ny;
+            body.vx *= 0.72;
+            body.vy *= 0.72;
+        }
+        return true;
+    }
+
+    // 기둥의 양 옆과 바닥까지 모두 동일한 반사 물리를 적용한다.
+    const overlapsPole = body.y + body.radius > netTop &&
+        body.y - body.radius < GROUND_Y &&
+        body.x + body.radius > NET_X - halfWidth &&
+        body.x - body.radius < NET_X + halfWidth;
+    if (overlapsPole) {
+        if (body.x <= NET_X) {
+            body.x = NET_X - halfWidth - body.radius;
+            if (body.vx > 0) body.vx *= -0.55;
+        } else {
+            body.x = NET_X + halfWidth + body.radius;
+            if (body.vx < 0) body.vx *= -0.55;
+        }
+        body.vy *= 0.82;
+        return true;
+    }
+    return false;
+}
 
 const game = {
     state: 'INTRO_FADEIN', 
@@ -571,7 +620,7 @@ class Player {
         if (this.isAI) {
             if (this.aiDifficulty === 'easy') this.baseSpeed = 4.5;
             else if (this.aiDifficulty === 'normal') this.baseSpeed = 7;
-            else if (this.aiDifficulty === 'hard') this.baseSpeed = 9.5;
+            else if (this.aiDifficulty === 'hard') this.baseSpeed = 13.5;
         } else {
             this.baseSpeed = 7;
         }
@@ -583,7 +632,8 @@ class Player {
         this.isSliding = false;
         this.slideTimer = 0;
         this.slideDir = 1; 
-        this.bufferTimer = 0; 
+        this.bufferTimer = 0;
+        this.hitCooldown = 0;
         this.prevAction = false;
         this.prevDown = false;
         this.jumpLocked = false; 
@@ -605,8 +655,73 @@ class Player {
         this.currentAnim = null; 
     }
 
+    updateHardAI(shuttle) {
+        this.aiKeys = { left: false, right: false, jump: false, down: false, action: false };
+        if (game.state !== 'PLAYING' && game.state !== 'SERVING' && game.state !== 'FADEIN_READY') return;
+
+        const isServing = game.state === 'SERVING' &&
+            ((game.server === 1 && this.isPlayer1) || (game.server === 2 && !this.isPlayer1));
+        if (isServing) {
+            this.aiTimer++;
+            if (this.aiTimer > 18) {
+                this.aiKeys.jump = true;
+                this.aiKeys.action = true;
+                this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
+                this.aiTimer = 0;
+            }
+            return;
+        }
+
+        const onMySide = this.isPlayer1 ? shuttle.x < NET_X : shuttle.x > NET_X;
+        const centerX = this.x + this.width / 2;
+        const centerY = this.y + this.height / 2;
+        const homeX = this.isPlayer1 ? NET_X * 0.48 : NET_X + (canvas.width - NET_X) * 0.52;
+        let targetX = homeX;
+        let interceptFrames = Infinity;
+
+        if (onMySide) {
+            const sim = { x: shuttle.x, y: shuttle.y, vx: shuttle.vx, vy: shuttle.vy, radius: shuttle.radius };
+            for (let frame = 0; frame < 240; frame++) {
+                sim.vx *= SHUTTLECOCK_DRAG;
+                sim.vy *= SHUTTLECOCK_DRAG;
+                sim.vy += GRAVITY * 0.85;
+                sim.x += sim.vx;
+                sim.y += sim.vy;
+                resolveNetCollision(sim);
+                if (sim.x - sim.radius < 0 || sim.x + sim.radius > canvas.width) sim.vx *= -0.5;
+
+                const stillMine = this.isPlayer1 ? sim.x < NET_X : sim.x > NET_X;
+                if (stillMine && sim.vy > 0 && sim.y >= GROUND_Y - 105) {
+                    interceptFrames = frame;
+                    targetX = sim.x + (this.isPlayer1 ? -28 : 28);
+                    break;
+                }
+            }
+            if (!Number.isFinite(interceptFrames)) targetX = shuttle.x + (this.isPlayer1 ? -28 : 28);
+        }
+
+        const minCenter = this.isPlayer1 ? this.width / 2 : NET_X + NET_WIDTH / 2 + this.width / 2;
+        const maxCenter = this.isPlayer1 ? NET_X - NET_WIDTH / 2 - this.width / 2 : canvas.width - this.width / 2;
+        targetX = Math.max(minCenter, Math.min(maxCenter, targetX));
+        const deltaX = targetX - centerX;
+        if (Math.abs(deltaX) > 2) this.aiKeys[deltaX > 0 ? 'right' : 'left'] = true;
+
+        const distance = Math.hypot(shuttle.x - centerX, shuttle.y - centerY);
+        if (onMySide && this.isGrounded && interceptFrames < 48 && shuttle.y < centerY - 25) {
+            this.aiKeys.jump = true;
+        }
+        // 하드는 지연이나 확률적 실수 없이 닿는 즉시 타격한다.
+        if (onMySide && distance <= HITBOX_RADIUS + shuttle.radius + 8) {
+            this.aiKeys.action = true;
+        }
+    }
+
     updateAI(shuttle) {
         if (!this.isAI) return;
+        if (this.aiDifficulty === 'hard') {
+            this.updateHardAI(shuttle);
+            return;
+        }
         this.aiKeys = { left: false, right: false, jump: false, down: false, action: false };
 
         if (game.state !== 'PLAYING' && game.state !== 'SERVING' && game.state !== 'FADEIN_READY') return;
@@ -639,17 +754,12 @@ class Player {
                 simX += simVx;
                 simY += simVy;
                 
-                let netLeft = NET_X - NET_WIDTH/2;
-                let netRight = NET_X + NET_WIDTH/2;
-                let netTop = GROUND_Y - NET_HEIGHT;
-                if (simX + shuttle.radius > netLeft && simX - shuttle.radius < netRight && simY + shuttle.radius > netTop && simY < GROUND_Y) {
-                    if (simY < netTop + 15 && simVy > 0) {
-                        simVy *= -0.3;
-                        simVx *= 0.2;
-                    } else {
-                        simVx *= -0.5;
-                    }
-                }
+                        const simulatedShuttle = { x: simX, y: simY, vx: simVx, vy: simVy, radius: shuttle.radius };
+                resolveNetCollision(simulatedShuttle);
+                simX = simulatedShuttle.x;
+                simY = simulatedShuttle.y;
+                simVx = simulatedShuttle.vx;
+                simVy = simulatedShuttle.vy;
                 
                 if (simX - shuttle.radius < 0 || simX + shuttle.radius > canvas.width) {
                     simVx *= -0.5;
@@ -754,6 +864,7 @@ class Player {
 
     update() {
         if (this.bufferTimer > 0) this.bufferTimer--;
+        if (this.hitCooldown > 0) this.hitCooldown--;
 
         let kLeft = this.isAI ? this.aiKeys.left : keys[this.controls.left];
         let kRight = this.isAI ? this.aiKeys.right : keys[this.controls.right];
@@ -909,20 +1020,7 @@ class Shuttlecock {
         this.x += this.vx;
         this.y += this.vy;
 
-        let netLeft = NET_X - NET_WIDTH/2;
-        let netRight = NET_X + NET_WIDTH/2;
-        let netTop = GROUND_Y - NET_HEIGHT;
-
-        if (this.x + this.radius > netLeft && this.x - this.radius < netRight && this.y + this.radius > netTop && this.y < GROUND_Y) {
-            if (this.y < netTop + 5 && this.vy > 0) {
-                this.vy *= -0.5;
-                this.vx += (this.x > NET_X ? 2 : -2); 
-            } else {
-                this.vx *= -0.5;
-                if (this.x < NET_X) this.x = netLeft - this.radius;
-                else this.x = netRight + this.radius;
-            }
-        }
+        resolveNetCollision(this);
 
         if (this.y + this.radius >= GROUND_Y) {
             this.y = GROUND_Y - this.radius;
@@ -1008,7 +1106,9 @@ let p2 = new Player(1020, GROUND_Y - PLAYER_SIZE, false);
 let shuttle = new Shuttlecock(300, 100);
 
 function checkHit(player, shuttle) {
-    if (player.bufferTimer <= 0) return;
+    // 슬라이딩 중에는 별도의 스윙 입력 없이 접촉 자체가 스윙으로 처리된다.
+    const hasActiveSwing = player.bufferTimer > 0 || player.isSliding;
+    if (!hasActiveSwing || player.hitCooldown > 0) return;
     if (game.state === 'FADEIN_READY') return;
 
     if (game.state === 'SERVING') {
@@ -1023,16 +1123,23 @@ function checkHit(player, shuttle) {
     if (distance <= HITBOX_RADIUS + shuttle.radius) {
         let kJump = player.isAI ? player.aiKeys.jump : keys[player.controls.jump];
 
-        let angle = Math.atan2(shuttle.y - pCenterY, shuttle.x - pCenterX);
-        
+        const relX = shuttle.x - pCenterX;
+        const relY = shuttle.y - pCenterY;
+        const isFrontHalf = player.isPlayer1 ? relX >= 0 : relX <= 0;
         const HIT_SPEED = 34;
-        
-        let hVx = Math.cos(angle) * HIT_SPEED;
-        let hVy = Math.sin(angle) * HIT_SPEED;
 
-        shuttle.vx = hVx;
-        shuttle.vy = hVy;
-        player.bufferTimer = 0; 
+        if (isFrontHalf) {
+            // 앞쪽 반원은 기존 방사형 스윙을 사용한다. 앞쪽 판정 덕분에 절대 뒤로 날아가지 않는다.
+            const angle = Math.atan2(relY, relX);
+            shuttle.vx = Math.cos(angle) * HIT_SPEED;
+            shuttle.vy = Math.sin(angle) * HIT_SPEED;
+        } else {
+            // 뒤쪽 반원에서 맞은 셔틀콕은 반대편으로 잘못 발사되지 않고 곧장 위로 뜬다.
+            shuttle.vx = 0;
+            shuttle.vy = -HIT_SPEED;
+        }
+        player.bufferTimer = 0;
+        player.hitCooldown = 8;
         
         if (game.state === 'SERVING') {
             game.state = 'PLAYING';
@@ -1042,8 +1149,8 @@ function checkHit(player, shuttle) {
 }
 
 function resetPositions() {
-    p1.x = 200; p1.y = GROUND_Y - p1.height; p1.vx = 0; p1.vy = 0; p1.isGrounded = true; p1.isSliding = false; p1.slideDir = 1; p1.currentAnim = null; p1.bufferTimer = 0;
-    p2.x = 1020; p2.y = GROUND_Y - p2.height; p2.vx = 0; p2.vy = 0; p2.isGrounded = true; p2.isSliding = false; p2.slideDir = -1; p2.currentAnim = null; p2.bufferTimer = 0;
+    p1.x = 200; p1.y = GROUND_Y - p1.height; p1.vx = 0; p1.vy = 0; p1.isGrounded = true; p1.isSliding = false; p1.slideDir = 1; p1.currentAnim = null; p1.bufferTimer = 0; p1.hitCooldown = 0;
+    p2.x = 1020; p2.y = GROUND_Y - p2.height; p2.vx = 0; p2.vy = 0; p2.isGrounded = true; p2.isSliding = false; p2.slideDir = -1; p2.currentAnim = null; p2.bufferTimer = 0; p2.hitCooldown = 0;
     shuttle.isDead = false;
     game.timeScale = window.appSettings ? window.appSettings.speed : 1.2;
 }
@@ -1088,33 +1195,17 @@ function gameLoop() {
         ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
     }
     
-    let currentNetTop = GROUND_Y - NET_HEIGHT;
+    const currentNetTop = GROUND_Y - NET_HEIGHT;
 
-    ctx.fillStyle = '#333';
-    ctx.fillRect(NET_X - 2, GROUND_Y - NET_HEIGHT, 4, NET_HEIGHT);
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 8; i < NET_HEIGHT; i += 8) {
-        let lineY = GROUND_Y - NET_HEIGHT + i;
-        if (lineY >= currentNetTop) { 
-            ctx.moveTo(NET_X - NET_WIDTH/2 - 4, lineY);
-            ctx.lineTo(NET_X + NET_WIDTH/2 + 4, lineY);
-        }
-    }
-    for (let i = 0; i <= NET_WIDTH + 8; i += 4) {
-        let lineX = NET_X - NET_WIDTH/2 - 4 + i;
-        ctx.moveTo(lineX, currentNetTop);
-        ctx.lineTo(lineX, GROUND_Y);
-    }
-    ctx.stroke();
-
-    ctx.fillStyle = '#f0f0f0';
-    ctx.fillRect(NET_X - NET_WIDTH/2 - 6, currentNetTop, NET_WIDTH + 12, 10);
+    // 단순한 얇은 막대와 상단 원으로 구성된 네트
     ctx.fillStyle = '#555';
-    ctx.fillRect(NET_X - NET_WIDTH/2 - 8, currentNetTop, 4, GROUND_Y - currentNetTop);
-    ctx.fillRect(NET_X + NET_WIDTH/2 + 4, currentNetTop, 4, GROUND_Y - currentNetTop);
+    ctx.fillRect(NET_X - NET_WIDTH / 2, currentNetTop, NET_WIDTH, NET_HEIGHT);
+    ctx.beginPath();
+    ctx.arc(NET_X, currentNetTop, NET_CAP_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f0f0f0';
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
     if (game.state === 'MENU_FADEIN') {
         game.timer--;
