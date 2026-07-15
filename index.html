@@ -252,6 +252,8 @@
 <div id="gameContainer">
     <img id="p1Gif" style="position: absolute; display: none; z-index: 10; transform-origin: center center; pointer-events: none;">
     <img id="p2Gif" style="position: absolute; display: none; z-index: 10; transform-origin: center center; pointer-events: none;">
+    <div id="p1Hitbox" style="position: absolute; display: none; z-index: 15; border-radius: 50%; background-color: rgba(255, 0, 0, 0.4); pointer-events: none; transform: translate(-50%, -50%); aspect-ratio: 1/1;"></div>
+    <div id="p2Hitbox" style="position: absolute; display: none; z-index: 15; border-radius: 50%; background-color: rgba(255, 0, 0, 0.4); pointer-events: none; transform: translate(-50%, -50%); aspect-ratio: 1/1;"></div>
     <img id="shuttleDom" style="position: absolute; display: none; z-index: 20; transform-origin: center center; pointer-events: none;">
     <div id="ui">
         <div id="score1">0</div>
@@ -378,7 +380,8 @@ const GROUND_Y = 620;
 const NET_X = 640;
 const PLAYER_SIZE = 60; 
 const NET_HEIGHT = PLAYER_SIZE * 2; 
-const NET_WIDTH = 12;
+const NET_WIDTH = 6; 
+const HITBOX_RADIUS = 55; 
 const JUMP_POWER = -Math.sqrt(2 * GRAVITY * (PLAYER_SIZE * 3.5)); 
 
 const game = {
@@ -582,6 +585,7 @@ class Player {
         this.slideDir = 1; 
         this.bufferTimer = 0; 
         this.prevAction = false;
+        this.prevDown = false;
         this.jumpLocked = false; 
         
         this.idleImg = document.getElementById('pandaIdle');
@@ -595,6 +599,8 @@ class Player {
         this.domElement = document.getElementById(isPlayer1 ? 'p1Gif' : 'p2Gif');
         this.domElement.style.width = (this.width / canvas.width) * 100 + '%';
         this.domElement.style.height = (this.height / canvas.height) * 100 + '%';
+        
+        this.hitboxDom = document.getElementById(isPlayer1 ? 'p1Hitbox' : 'p2Hitbox');
         
         this.currentAnim = null; 
     }
@@ -703,7 +709,7 @@ class Player {
                 if ((framesToIntercept > 0 && framesToIntercept <= 28) || (framesToIntercept === -1 && shuttle.y > GROUND_Y - 300 && shuttle.y < GROUND_Y - 100)) {
                     if (xDist < 80) shouldJump = true;
                 }
-                if (!this.isGrounded && distToShuttle < 110) {
+                if (distToShuttle <= HITBOX_RADIUS) {
                     shouldSwing = true;
                 }
                 if (this.isGrounded && framesToIntercept > 0 && framesToIntercept <= 25 && xDist > 100 && xDist < 250) {
@@ -713,42 +719,26 @@ class Player {
                 if ((framesToIntercept > 0 && framesToIntercept <= 25) || (framesToIntercept === -1 && shuttle.y > GROUND_Y - 300 && shuttle.y < GROUND_Y - 100)) {
                     if (xDist < 90) shouldJump = true;
                 }
-                if (!this.isGrounded && distToShuttle < 100) {
+                if (distToShuttle <= HITBOX_RADIUS) {
                     shouldSwing = true;
                 }
             } else { 
                 if ((framesToIntercept > 0 && framesToIntercept <= 20) || (framesToIntercept === -1 && shuttle.y > GROUND_Y - 300 && shuttle.y < GROUND_Y - 100)) {
                     if (xDist < 100 && Math.random() < 0.8) shouldJump = true; 
                 }
-                if (!this.isGrounded && distToShuttle < 100) {
+                if (distToShuttle <= HITBOX_RADIUS) {
                     if (Math.random() < 0.7) shouldSwing = true; 
                 }
             }
             
-            if (shouldSlide) this.aiKeys.action = true;
+            if (shouldSlide) {
+                this.aiKeys.down = true;
+                this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
+            }
             if (shouldJump && this.isGrounded) this.aiKeys.jump = true;
             
-            if (shouldSwing && !this.isGrounded) {
+            if (shouldSwing) {
                 this.aiKeys.action = true;
-                let distToNet = Math.abs(this.x + this.width/2 - NET_X);
-                if (this.aiDifficulty === 'hard') {
-                    if (shuttle.y < this.y - 10 && distToNet < 250) {
-                        this.aiKeys.down = true; 
-                        this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
-                    } else {
-                        this.aiKeys.jump = true; 
-                        this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
-                    }
-                } else if (this.aiDifficulty === 'normal') {
-                    if (shuttle.y < this.y && distToNet < 250 && Math.random() < 0.4) {
-                        this.aiKeys.down = true;
-                        this.aiKeys[this.isPlayer1 ? 'right' : 'left'] = true;
-                    } else {
-                        this.aiKeys.jump = true;
-                    }
-                } else {
-                    this.aiKeys.jump = true; 
-                }
             }
         }
     }
@@ -767,19 +757,25 @@ class Player {
         let actionPressed = false;
         if (kAction && !this.prevAction) actionPressed = true;
         this.prevAction = kAction;
+        
+        let downPressed = false;
+        if (kDown && !this.prevDown) downPressed = true;
+        this.prevDown = kDown;
 
         let isFadeInReady = game.state === 'FADEIN_READY';
         let isServing = game.state === 'SERVING' && ((game.server === 1 && this.isPlayer1) || (game.server === 2 && !this.isPlayer1));
 
+        if (downPressed && this.isGrounded && !this.isSliding && !isServing && !isFadeInReady) {
+            this.isSliding = true;
+            this.slideTimer = 48; 
+            if (kLeft) this.slideDir = -1;
+            else if (kRight) this.slideDir = 1;
+            else this.slideDir = this.isPlayer1 ? 1 : -1;
+        }
+
         if (actionPressed) {
-            if (this.isGrounded && !this.isSliding && (kLeft || kRight) && !isServing && !isFadeInReady) {
-                this.isSliding = true;
-                this.slideTimer = 48; 
-                this.slideDir = kLeft ? -1 : 1; 
-            } 
-            else if (this.bufferTimer === 0 && !isFadeInReady) {
-                let canSwing = !this.isGrounded || this.isSliding || isServing;
-                if (canSwing) this.bufferTimer = 24;
+            if (this.bufferTimer === 0 && !isFadeInReady) {
+                this.bufferTimer = 24; 
             }
         }
 
@@ -873,6 +869,14 @@ class Player {
         let scaleX = (this.isPlayer1 ? 1 : -1);
         if (this.isSliding) scaleX = this.slideDir;
         this.domElement.style.transform = `scale(${scaleX}, 1)`;
+        
+        let pCenterX = this.x + this.width / 2;
+        let pCenterY = this.y + this.height / 2;
+        this.hitboxDom.style.width = ((HITBOX_RADIUS * 2) / canvas.width) * 100 + '%';
+        this.hitboxDom.style.left = (pCenterX / canvas.width) * 100 + '%';
+        this.hitboxDom.style.top = (pCenterY / canvas.height) * 100 + '%';
+        this.hitboxDom.style.display = 'block';
+        this.hitboxDom.style.opacity = 1 - game.fadeAlpha;
     }
 }
 
@@ -901,11 +905,9 @@ class Shuttlecock {
         let netTop = GROUND_Y - NET_HEIGHT;
 
         if (this.x + this.radius > netLeft && this.x - this.radius < netRight && this.y + this.radius > netTop && this.y < GROUND_Y) {
-            if (this.y < netTop + 15 && this.vy > 0) {
-                game.netDepression = 25; 
-                this.vy = 2.5; 
-                this.vx *= 0.15; 
-                this.y = netTop - this.radius + 10;
+            if (this.y < netTop + 5 && this.vy > 0) {
+                this.vy *= -0.5;
+                this.vx += (this.x > NET_X ? 2 : -2); 
             } else {
                 this.vx *= -0.5;
                 if (this.x < NET_X) this.x = netLeft - this.radius;
@@ -1005,45 +1007,19 @@ function checkHit(player, shuttle) {
         if (!isServer) return; 
     }
 
-    let testX = Math.max(player.x, Math.min(shuttle.x, player.x + player.width));
-    let testY = Math.max(player.y, Math.min(shuttle.y, player.y + player.height));
-    let distance = Math.sqrt((shuttle.x - testX) ** 2 + (shuttle.y - testY) ** 2);
+    let pCenterX = player.x + player.width / 2;
+    let pCenterY = player.y + player.height / 2;
+    let distance = Math.sqrt((shuttle.x - pCenterX) ** 2 + (shuttle.y - pCenterY) ** 2);
 
-    if (distance <= shuttle.radius + 15) {
-        let hVx = 0;
-        let hVy = -12; 
-
-        let kLeft = player.isAI ? player.aiKeys.left : keys[player.controls.left];
-        let kRight = player.isAI ? player.aiKeys.right : keys[player.controls.right];
+    if (distance <= HITBOX_RADIUS + shuttle.radius) {
         let kJump = player.isAI ? player.aiKeys.jump : keys[player.controls.jump];
-        let kDown = player.isAI ? player.aiKeys.down : keys[player.controls.down];
 
-        if (kDown) {
-            let smashSpeed = 36;
-            if (kLeft || kRight) {
-                let rad = 30 * Math.PI / 180;
-                hVx = smashSpeed * Math.sin(rad); 
-                hVy = smashSpeed * Math.cos(rad); 
-            } else {
-                let rad = 15 * Math.PI / 180;
-                hVx = smashSpeed * Math.sin(rad); 
-                hVy = smashSpeed * Math.cos(rad); 
-            }
-            if (player.isPlayer1) hVx = Math.abs(hVx);
-            else hVx = -Math.abs(hVx);
-        } else {
-            if (kLeft) hVx = -28;
-            if (kRight) hVx = 28;
-            if (kJump) hVy = -24; 
-
-            if (player.isPlayer1) {
-                if (hVx < 0) hVx = Math.abs(hVx); 
-                if (hVx === 0) hVx = 20; 
-            } else {
-                if (hVx > 0) hVx = -Math.abs(hVx); 
-                if (hVx === 0) hVx = -20; 
-            }
-        }
+        let angle = Math.atan2(shuttle.y - pCenterY, shuttle.x - pCenterX);
+        
+        const HIT_SPEED = 34;
+        
+        let hVx = Math.cos(angle) * HIT_SPEED;
+        let hVy = Math.sin(angle) * HIT_SPEED;
 
         shuttle.vx = hVx;
         shuttle.vy = hVy;
@@ -1103,8 +1079,7 @@ function gameLoop() {
         ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
     }
     
-    game.netDepression += (0 - game.netDepression) * 0.15; 
-    let currentNetTop = GROUND_Y - NET_HEIGHT + game.netDepression;
+    let currentNetTop = GROUND_Y - NET_HEIGHT;
 
     ctx.fillStyle = '#333';
     ctx.fillRect(NET_X - 2, GROUND_Y - NET_HEIGHT, 4, NET_HEIGHT);
